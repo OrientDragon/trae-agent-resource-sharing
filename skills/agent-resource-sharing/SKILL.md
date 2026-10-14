@@ -1,11 +1,11 @@
 ---
 name: "agent-resource-sharing"
-description: "Manages shared resource rules and directory structure across multiple TRAE agents (skills, MCPs, templates, knowledge, artifacts). Invoke when installing shared resources, setting up resource sharing, migrating resources between agents, or managing the global shared directory."
+description: "Manages shared resource rules and directory structure across multiple TRAE agents (skills, MCPs, templates, knowledge, artifacts). Invoke when installing shared resources, setting up resource sharing, migrating resources between agents, managing the global shared directory, or when automatic skill invocation is needed."
 ---
 
 # 智能体资源共享管理 Skill
 
-本 Skill 定义了 TRAE 多智能体环境下的资源共享规则、目录结构和操作规范，确保 Skill、MCP、模板、知识库、成果文件等资源在各智能体间互通复用、独立存续。
+本 Skill 定义了 TRAE 多智能体环境下的资源共享规则、目录结构、安全审计机制和自动调用规范，确保 Skill、MCP、模板、知识库、成果文件等资源在各智能体间互通复用、独立存续、安全可靠。
 
 ## 何时调用
 
@@ -14,6 +14,25 @@ description: "Manages shared resource rules and directory structure across multi
 - 搭建新的智能体环境，需要复用已有资源时
 - 制定或调整资源共享策略时
 - 卸载智能体但需要保留其安装的资源时
+- 从远程拉取第三方 Skill 需要安全审计时
+- 需要配置自动调用规则时
+
+---
+
+## 零、自动调用规则
+
+本 Skill 被设计为在以下场景**自动触发**，无需用户显式调用：
+
+| 触发场景 | 自动执行动作 |
+|---------|------------|
+| 用户说"安装 skill" | 自动检查共享池是否已存在，不存在则引导安装 |
+| 用户说"共享这个 skill" | 自动复制到共享目录并注册 |
+| 用户说"新建智能体环境" | 自动扫描共享池，列出可复用资源 |
+| 用户说"卸载智能体" | 自动提示资源保留策略，不删除共享资源 |
+| 用户说"拉取远程 skill" | 自动执行安全审计（见规则21） |
+| 用户说"查找可用资源" | 自动读取注册表，返回可用资源列表 |
+| 用户说"版本冲突" | 自动检查多版本共存情况，建议锁定方案 |
+| 智能体启动时 | 自动扫描共享目录，发现新增资源 |
 
 ---
 
@@ -36,6 +55,15 @@ description: "Manages shared resource rules and directory structure across multi
 - 同一资源（同名同版本）在系统中只保留一份
 - 智能体对共享资源默认为只读，不得主动删除、修改、移动
 - 资源的写入/更新需通过统一的安装/升级流程进行
+
+### 规则2.1：资源强制共享原则（新增）
+
+**各智能体的所有资源必须放入共享目录，不允许私有存储。**
+
+- 智能体安装新 Skill 时，默认安装到 `~/.trae-cn/shared/skills/` 而非私有目录
+- 智能体产生的模板、配置、成果文件，默认放入共享目录对应分类
+- 智能体私有目录仅保留：对话记忆、临时缓存、锁定配置（`resource-lock.json`）
+- 强制共享确保任何智能体卸载后，其贡献的资源仍可供其他智能体使用
 
 ---
 
@@ -122,28 +150,86 @@ MCP 服务全局注册，同一服务只启动一个实例，多智能体共享�
 
 ---
 
-## 三、共享目录结构
+## 三、安全审计规则（新增）
+
+### 规则21：远程 Skill 安全审计机制
+
+**从远程拉取第三方 Skill 时，必须执行安全审计，防止恶意代码注入。**
+
+#### 21.1 审计触发条件
+
+- 从 GitHub 克隆 Skill 时
+- 从 npm/pip 等包管理器安装 Skill 时
+- 从任何远程 URL 下载 Skill 时
+- 用户手动放入共享目录的未知来源 Skill 首次被加载时
+
+#### 21.2 审计检查项
+
+| 检查项 | 恶意特征 | 处理方式 |
+|--------|---------|---------|
+| 文件内容扫描 | 包含 `eval(`、`exec(`、`system(`、`shell_exec` 等危险函数 | 标记为恶意，拒绝安装 |
+| 网络请求检测 | 包含未经授权的外部 URL 请求（非官方 API） | 标记为可疑，需用户确认 |
+| 文件系统操作 | 尝试写入 `~/.ssh/`、`~/.aws/`、系统目录等敏感路径 | 标记为恶意，拒绝安装 |
+| 凭证窃取检测 | 尝试读取环境变量中的 Token、Key、Secret | 标记为恶意，拒绝安装 |
+| 混淆代码检测 | 包含 Base64 解码后立即执行的代码 | 标记为可疑，需人工审查 |
+| 依赖链审计 | 依赖的第三方包包含已知漏洞（CVE） | 提示风险，建议升级或替换 |
+| 权限声明检查 | 声明的权限超出功能描述所需范围 | 标记为可疑，需用户确认 |
+
+#### 21.3 审计流程
+
+```
+1. 下载 Skill 到临时隔离区（quarantine/）
+2. 静态代码扫描（正则匹配危险模式）
+3. 依赖链分析（检查 package.json/requirements.txt）
+4. 权限声明审查（对比功能描述与声明权限）
+5. 生成审计报告（audit-report.json）
+6. 判定结果：
+   - 安全 → 移入共享目录，注册到注册表
+   - 可疑 → 提示用户确认，用户批准后方可安装
+   - 恶意 → 自动删除，记录到黑名单（blacklist.json）
+```
+
+#### 21.4 黑名单机制
+
+- 恶意 Skill 的特征码（哈希、作者、URL）记录到 `shared/registry/blacklist.json`
+- 再次遇到相同特征的资源时，直接拒绝安装并提示用户
+- 黑名单支持社区共享，可订阅可信来源的黑名单更新
+
+#### 21.5 审计工具集成
+
+推荐使用以下工具进行深度审计：
+- **静态分析**：`bandit`（Python）、`eslint-plugin-security`（JavaScript）
+- **依赖检查**：`safety`（Python）、`npm audit`（Node.js）
+- **沙箱运行**：在隔离环境中试运行 Skill，监控其行为
+
+---
+
+## 四、共享目录结构（更新）
 
 ```
 ~/.trae-cn/shared/
 ├── skills/
 │   ├── builtin/           # 内置 Skill
 │   ├── plugins/           # 插件提供的 Skill
-│   └── user/              # 用户自定义 Skill
+│   ├── user/              # 用户自定义 Skill
+│   └── quarantine/        # 隔离区（待审计的远程 Skill）
 ├── mcps/                  # 共享 MCP 服务
 ├── templates/             # 共享模板与脚手架
 ├── knowledge/             # 共享知识库
 ├── artifacts/             # 共享成果文件
 ├── config/                # 共享配置
-└── registry/
-    └── resource-registry.json   # 全局资源注册表
+├── registry/
+│   ├── resource-registry.json   # 全局资源注册表
+│   ├── blacklist.json           # 恶意资源黑名单
+│   └── audit-log.json           # 审计日志
+└── cache/                 # 共享缓存（如模型缓存、索引缓存）
 ```
 
 ---
 
-## 四、操作指南
+## 五、操作指南
 
-### 4.1 安装一个共享 Skill
+### 5.1 安装一个共享 Skill
 
 1. 确定资源名称和命名空间（如 user:my-skill）
 2. 在 shared/skills/<namespace>/ 下创建 <name>@<version>/ 目录
@@ -151,14 +237,14 @@ MCP 服务全局注册，同一服务只启动一个实例，多智能体共享�
 4. 在 resource-registry.json 中注册该资源
 5. 在各智能体的可用资源列表中即可发现
 
-### 4.2 迁移已安装的 Skill 到共享池
+### 5.2 迁移已安装的 Skill 到共享池
 
 1. 找到源 Skill 所在目录
 2. 复制到 shared/skills/<对应命名空间>/<name>@<version>/
 3. 在注册表中登记
 4. 验证其他智能体能否正确发现和加载
 
-### 4.3 锁定资源版本（智能体私有）
+### 5.3 锁定资源版本（智能体私有）
 
 在智能体私有目录下创建 `resource-lock.json`：
 
@@ -171,13 +257,24 @@ MCP 服务全局注册，同一服务只启动一个实例，多智能体共享�
 }
 ```
 
-### 4.4 卸载智能体但保留资源
+### 5.4 卸载智能体但保留资源
 
 只需删除智能体私有目录，`~/.trae-cn/shared/` 下的所有共享资源不受影响。
 
+### 5.5 从远程安装 Skill（带安全审计）
+
+```bash
+# 示例：从 GitHub 安装 Skill
+1. git clone https://github.com/xxx/skill-repo.git ~/.trae-cn/shared/skills/quarantine/skill-repo
+2. 执行安全审计（静态扫描 + 依赖检查）
+3. 审计通过 → 移动到 shared/skills/github/xxx/skill-repo@1.0.0/
+4. 审计可疑 → 提示用户确认
+5. 审计恶意 → 自动删除，加入黑名单
+```
+
 ---
 
-## 五、注册表格式规范
+## 六、注册表格式规范
 
 `resource-registry.json` 结构：
 
@@ -215,6 +312,8 @@ MCP 服务全局注册，同一服务只启动一个实例，多智能体共享�
       },
       "tags": [],
       "securityLevel": "public | restricted | private",
+      "auditStatus": "pending | passed | suspicious | malicious",
+      "auditTime": "ISO 8601 审计时间",
       "usageCount": 0
     }
   ]
@@ -223,7 +322,7 @@ MCP 服务全局注册，同一服务只启动一个实例，多智能体共享�
 
 ---
 
-## 六、执行优先级
+## 七、执行优先级
 
 1. **用户显式指令** > 规则约定
 2. **数据安全与隐私保护** > 共享便利性
@@ -232,9 +331,61 @@ MCP 服务全局注册，同一服务只启动一个实例，多智能体共享�
 
 ---
 
-## 七、注意事项
+## 八、新增补充规则
+
+### 规则22：智能体资源贡献激励
+
+- 智能体每贡献一个高质量共享资源，在注册表中记录 `contributionScore`
+- 高贡献智能体的资源在搜索结果中优先展示
+- 定期生成资源共享报告，展示各智能体的贡献排名
+
+### 规则23：资源热更新机制
+
+- 共享资源更新时，智能体无需重启即可感知（通过文件监听或注册表版本号对比）
+- 锁定版本的智能体不受影响，未锁定的自动热更新
+- 热更新失败时自动回退到上一可用版本
+
+### 规则24：资源使用分析看板
+
+- 全局维护资源使用统计数据（调用频次、成功率、平均耗时、错误率）
+- 生成可视化看板，帮助用户发现：
+  - 最常用的资源（考虑内置到系统）
+  - 长期未使用的资源（考虑清理）
+  - 错误率高的资源（考虑修复或替换）
+
+### 规则25：跨项目资源继承
+
+- 新项目创建时，可继承已有项目的共享资源配置（`resource-lock.json`）
+- 支持项目模板，预定义一套共享资源组合（如"前端开发套件"、"数据分析套件"）
+- 一键应用模板，自动安装/锁定所需资源
+
+### 规则26：资源备份与恢复
+
+- 定期自动备份共享目录到 `shared/backups/YYYY-MM-DD/`
+- 支持按时间点恢复整个共享池或单个资源
+- 备份策略可配置（保留最近 N 份 / 保留最近 N 天）
+
+### 规则27：资源权限细粒度控制
+
+- 除了公开/受限/私有三级，支持更细粒度的权限控制：
+  - `read-only`：只能使用，不能查看源码
+  - `read-write`：可以使用和修改，但不能删除
+  - `admin`：完全控制（使用、修改、删除、分享）
+- 权限按智能体维度配置，不同智能体对同一资源可有不同权限
+
+### 规则28：资源版本回滚保护
+
+- 资源升级后，自动保留最近 3 个历史版本
+- 任何版本回滚操作需记录日志（谁、何时、为何回滚）
+- 频繁回滚的资源标记为"不稳定"，提示维护者关注
+
+---
+
+## 九、注意事项
 
 - 操作共享资源前确认用户意图，避免误改
 - 敏感信息（凭证、Token 等）不得明文存储在共享目录
 - 第三方来源的资源安装前需提示风险并获得用户确认
 - 资源删除操作需二次确认，默认采用"软删除"（仅从注册表移除，文件保留）
+- 安全审计发现恶意资源时，立即删除并通知所有智能体
+- 共享目录的写入操作必须通过统一接口，禁止直接修改文件
