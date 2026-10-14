@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "1.0",
+  "lastUpdated": "2026-10-14T00:00:00+08:00",
+  "description": "TRAE 全局共享资源注册表",
+  "stats": {
+    "totalResources": 1,
+    "byType": {
+      "skill": 1,
+      "mcp": 0,
+      "template": 0,
+      "knowledge": 0,
+      "artifact": 0,
+      "config": 0
+    }
+  },
+  "resources": [
+    {
+      "id": "user:agent-resource-sharing",
+      "name": "agent-resource-sharing",
+      "namespace": "user",
+      "type": "skill",
+      "version": "1.0.0",
+      "description": "Manages shared resource rules and directory structure across multiple TRAE agents",
+      "author": "OrientDragon",
+      "installTime": "2026-10-14T00:00:00+08:00",
+      "path": "skills/user/agent-resource-sharing@1.0.0",
+      "dependencies": [],
+      "compatibility": {
+        "agentTypes": ["work", "code", "design"],
+        "minVersion": "1.0.0"
+      },
+      "tags": ["resource-sharing", "multi-agent", "skill-management"],
+      "securityLevel": "public",
+      "usageCount": 0
+    }
+  ]
+}
