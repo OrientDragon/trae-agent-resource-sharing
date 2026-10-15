@@ -1,32 +1,38 @@
 ---
 name: "agent-resource-sharing"
-description: "Manages shared resource rules and directory structure across multiple TRAE agents (skills, MCPs, templates, knowledge, artifacts). Invoke when installing shared resources, setting up resource sharing, migrating resources between agents, managing the global shared directory, or when automatic skill invocation is needed."
+description: "跨智能体通用的资源共享规范与目录约定，适配 WorkBuddy、TRAE、Claude Code、ChatGPT、Codex、Gemini CLI、Cursor 等所有 AI 编程/对话智能体。定义统一的固定共享根目录（规则0）、资源独立存续原则、命名空间、注册表与发现机制、安全审计（规则21-28）。在需要安装/迁移/共享 skill、MCP/Connector、模板、知识库、成果文件，或搭建多智能体协作环境时调用。"
 ---
 
-# 智能体资源共享管理 Skill
+# 跨智能体资源共享规范（Agent-Agnostic Resource Sharing）
 
-本 Skill 定义了 TRAE 多智能体环境下的资源共享规则、目录结构、安全审计机制和自动调用规范，确保 Skill、MCP、模板、知识库、成果文件等资源在各智能体间互通复用、独立存续、安全可靠。
+本 Skill 定义一套**与具体智能体无关**的资源共享规则、固定目录约定与操作规范。它不绑定 WorkBuddy、TRAE、Claude Code、ChatGPT、Codex、Gemini CLI、Cursor 等任何单一智能体——任何支持「读取本地目录 + 加载 SKILL.md」机制的智能体均可直接套用，让 Skill、MCP/Connector、模板、知识库、成果文件等资源在**所有智能体之间互通复用、独立存续**。
+
+## 设计目标
+
+- 一份资源，所有智能体共用，不重复存储
+- 资源生命周期独立于任何智能体（卸载/删除某智能体不丢资源）
+- 固定、中立的存储位置，不嵌套在任何智能体的私有目录里
+- 适配国内外主流智能体（见「智能体适配」一节）
 
 ## 何时调用
 
-- 用户要求安装/迁移/管理共享资源时
-- 需要在多个智能体间共享 Skill、MCP 或其他资源时
+- 用户要求安装/迁移/管理跨智能体共享资源时
+- 需要在多个智能体（WorkBuddy / TRAE / Claude Code / ChatGPT / Codex 等）间共享 Skill、MCP、模板、知识库、成果文件时
 - 搭建新的智能体环境，需要复用已有资源时
 - 制定或调整资源共享策略时
-- 卸载智能体但需要保留其安装的资源时
-- 从远程拉取第三方 Skill 需要安全审计时
-- 需要配置自动调用规则时
+- 删除/卸载某智能体但需要保留其安装的资源时
+- 从远程（GitHub / npm 等）拉取第三方 Skill 需要安全审计时
 
 ---
 
 ## 零、自动调用规则
 
-本 Skill 被设计为在以下场景**自动触发**，无需用户显式调用：
+本 Skill 被设计为在以下场景**自动触发**（无论运行于哪个智能体），无需用户显式调用：
 
 | 触发场景 | 自动执行动作 |
 |---------|------------|
 | 用户说"安装 skill" | 自动检查共享池是否已存在，不存在则引导安装 |
-| 用户说"共享这个 skill" | 自动复制到共享目录并注册 |
+| 用户说"共享这个 skill" | 自动复制到共享根目录并注册 |
 | 用户说"新建智能体环境" | 自动扫描共享池，列出可复用资源 |
 | 用户说"卸载智能体" | 自动提示资源保留策略，不删除共享资源 |
 | 用户说"拉取远程 skill" | 自动执行安全审计（见规则21） |
@@ -36,7 +42,20 @@ description: "Manages shared resource rules and directory structure across multi
 
 ---
 
-## 一、核心原则
+## 一、核心原则与完整规则体系
+
+### 规则0：固定共享根目录（强制，新增）
+
+**所有共享资源必须存放在一个固定的、与智能体无关的共享根目录下，禁止散落在各智能体私有目录中。**
+
+- 共享根目录（固定）：`~/.agent-shared/`
+  - 波浪号 `~` 展开为用户主目录：Windows 即 `C:\Users\<用户名>\.agent-shared\`，macOS/Linux 即 `$HOME/.agent-shared`
+- 允许通过环境变量 `AGENT_SHARED_ROOT` 覆盖（用于便携盘、云同步、团队统一路径等场景）；**一旦设定，所有智能体必须遵循同一路径**，不得各自为政
+- 所有 skill / MCP / 模板 / 知识库 / 成果 / 配置，**只允许**落在该根目录下的分类子目录中（见「共享目录结构」），不得写入 `~/.workbuddy/`、`~/.trae-cn/`、`~/.claude/`、各应用的 `Application Support` 等任何单一智能体的私有目录
+- 该根目录位于用户主目录、**不属于任何智能体**，因此卸载或删除任意一个智能体都不会影响其中的资源——这是「资源独立存续」的物理基础
+- 首次使用时执行一次初始化（创建目录结构 + 注册表），之后所有智能体共用同一份
+
+> 这是本规范最重要的约束：统一在 `~/.agent-shared/` 一处，是跨智能体互通与资源不丢失的前提。任何新增资源都不得绕过此目录。
 
 ### 规则1：资源独立存续原则
 
@@ -45,33 +64,29 @@ description: "Manages shared resource rules and directory structure across multi
 - 卸载/删除任一智能体时，不得删除其安装过的 skill、MCP 服务、生成的成果文件
 - 智能体 A 安装的 skill，智能体 B 可直接发现并使用，无需重复安装
 - 资源的生命周期独立于智能体的生命周期
-- 智能体仅作为资源的"使用者"和"安装者"，而非"所有者"
+- 智能体仅作为资源的「使用者」和「安装者」，而非「所有者」
 
 ### 规则2：共享资源集中存储原则
 
-**所有可共享的资源集中存放于独立目录，各智能体均可读取，不重复存储。**
+**所有可共享的资源集中存放于规则0定义的固定共享根目录，各智能体均可读取，不重复存储。**
 
-- 共享资源存放于全局独立目录（`~/.trae-cn/shared/`），不嵌入任何智能体的私有目录
+- 共享资源存放于 `~/.agent-shared/`（或 `AGENT_SHARED_ROOT` 覆盖值），不嵌入任何智能体的私有目录
 - 同一资源（同名同版本）在系统中只保留一份
 - 智能体对共享资源默认为只读，不得主动删除、修改、移动
 - 资源的写入/更新需通过统一的安装/升级流程进行
 
 ### 规则2.1：资源强制共享原则（新增）
 
-**各智能体的所有资源必须放入共享目录，不允许私有存储。**
+**各智能体的所有资源必须放入共享根目录，不允许私有存储。**
 
-- 智能体安装新 Skill 时，默认安装到 `~/.trae-cn/shared/skills/` 而非私有目录
-- 智能体产生的模板、配置、成果文件，默认放入共享目录对应分类
+- 智能体安装新 Skill 时，默认安装到 `<root>/skills/` 而非其私有目录
+- 智能体产生的模板、配置、成果文件，默认放入共享根目录对应分类
 - 智能体私有目录仅保留：对话记忆、临时缓存、锁定配置（`resource-lock.json`）
 - 强制共享确保任何智能体卸载后，其贡献的资源仍可供其他智能体使用
 
----
-
-## 二、完整规则体系
-
 ### 规则3：资源发现与注册机制
 
-全局维护 `shared/registry/resource-registry.json`，记录所有已安装资源的元信息。新资源安装时自动注册，智能体启动时扫描注册表发现可用资源。
+全局维护 `<root>/registry/resource-registry.json`，记录所有已安装资源的元信息（`<root>` 即规则0的固定共享根）。新资源安装时自动注册，智能体启动时扫描注册表发现可用资源。
 
 ### 规则4：版本共存与兼容规则
 
@@ -83,18 +98,18 @@ Skill、MCP 可声明依赖，安装时自动检查并安装缺失的依赖。�
 
 ### 规则6：命名空间与命名规范
 
-- 内置资源：`builtin:<资源名>`
-- 官方插件资源：`<插件名>:<资源名>`（如 `lark:lark-doc`）
+- 内置资源：`builtin:<资源名>`（各智能体内置能力经共享暴露）
 - 用户自定义资源：`user:<资源名>`
-- 第三方来源：`<来源标识>:<资源名>`（如 `github:xxx/yyy`）
+- 项目级资源：`project:<资源名>`（与具体项目绑定，但仍存于共享根的 `project/` 下）
+- 远程/第三方来源：`remote:<来源标识>/<资源名>`（如 `remote:github/xxx/yyy`、`remote:npm/xxx`）
 
 ### 规则7：成果文件共享规则
 
-代码模板、配置文件、文档模板、数据集等可标记为共享，存放于 `shared/artifacts/`。使用时引用而非复制，确保单一数据源。
+代码模板、配置文件、文档模板、数据集等可标记为共享，存放于 `<root>/artifacts/`。使用时引用而非复制，确保单一数据源。
 
 ### 规则8：配置与环境共享规则
 
-通用配置存放于 `shared/config/`，凭证类信息加密存储，需显式授权才能使用。共享配置按"配置集"组织。
+通用配置存放于 `<root>/config/`，凭证类信息加密存储，需显式授权才能使用。共享配置按「配置集」组织。
 
 ### 规则9：知识库与记忆共享规则
 
@@ -106,11 +121,11 @@ Skill、MCP 可声明依赖，安装时自动检查并安装缺失的依赖。�
 
 ### 规则11：资源锁定与冲突避免
 
-每个智能体维护自己的 `resource-lock.json`，声明锁定的资源版本。未锁定的默认使用最新兼容版本。
+每个智能体维护自己的 `resource-lock.json`（存于自身私有目录或 `<root>/locks/<agent-id>/`），声明锁定的资源版本。未锁定的默认使用最新兼容版本。
 
 ### 规则12：资源生命周期管理
 
-- 安装：下载/复制到共享目录 → 注册到注册表
+- 安装：下载/复制到共享根目录 → 注册到注册表
 - 升级：安装新版本，旧版本保留
 - 降级：通过锁定机制切换到旧版本
 - 卸载：从注册表移除，文件默认保留以便回退
@@ -123,45 +138,42 @@ Skill、MCP 可声明依赖，安装时自动检查并安装缺失的依赖。�
 ### 规则14：元数据规范
 
 必选字段：`name`、`version`、`type`、`description`、`author`、`installTime`、`dependencies`、`compatibility`
+可选字段：`tags`、`documentation`、`license`、`homepage`、`usageCount`
 
-### 规则15：MCP 服务共享规则
+### 规则15：MCP / Connector 服务共享规则
 
-MCP 服务全局注册，同一服务只启动一个实例，多智能体共享使用。配置全局存储，智能体可按工具粒度授权。
+MCP（及各类智能体的等效连接器，如 WorkBuddy Connector、TRAE MCP）全局注册，同一服务只启动一个实例，多智能体共享使用。配置全局存储，智能体可按工具粒度授权。
 
 ### 规则16：模板与脚手架共享规则
 
-项目模板、代码脚手架存放于 `shared/templates/`。智能体创建项目时可从共享模板库选择。
+项目模板、代码脚手架存放于 `<root>/templates/`。智能体创建项目时可从共享模板库选择。
 
 ### 规则17：资源使用统计与反馈
 
-匿名统计调用频次、成功率，智能体可对资源打分评价。长期未使用的资源标记为"可能过时"。
+匿名统计调用频次、成功率，智能体可对资源打分评价。长期未使用的资源标记为「可能过时」。
 
 ### 规则18：跨设备同步规则
 
-共享资源目录可配置同步策略（本地 / 云端 / 混合）。云端同步时敏感信息加密处理。
+共享根目录可配置同步策略（本地 / 云端 / 混合）。云端同步时敏感信息加密处理。
 
-### 规则19：插件级共享规则
+### 规则19：插件/扩展级共享规则
 
-插件安装到全局插件目录，所有智能体均可启用其中的能力。智能体可按需启用/禁用特定插件的特定能力。
+插件（或智能体的等效扩展包）作为资源集合整体共享，安装到共享根的相应分类，所有智能体均可启用其中的能力。
 
 ### 规则20：故障隔离与降级
 
 单个共享资源故障不影响其他资源和智能体。智能体可配置备选资源（fallback），主资源不可用时自动切换。
 
----
+### 规则21：远程资源安全审计机制
 
-## 三、安全审计规则（新增）
-
-### 规则21：远程 Skill 安全审计机制
-
-**从远程拉取第三方 Skill 时，必须执行安全审计，防止恶意代码注入。**
+**从远程拉取第三方 Skill / 资源时，必须执行安全审计，防止恶意代码注入。**
 
 #### 21.1 审计触发条件
 
 - 从 GitHub 克隆 Skill 时
 - 从 npm/pip 等包管理器安装 Skill 时
 - 从任何远程 URL 下载 Skill 时
-- 用户手动放入共享目录的未知来源 Skill 首次被加载时
+- 用户手动放入共享目录的未知来源资源首次被加载时
 
 #### 21.2 审计检查项
 
@@ -178,166 +190,36 @@ MCP 服务全局注册，同一服务只启动一个实例，多智能体共享�
 #### 21.3 审计流程
 
 ```
-1. 下载 Skill 到临时隔离区（quarantine/）
+1. 下载资源到临时隔离区（<root>/skills/quarantine/）
 2. 静态代码扫描（正则匹配危险模式）
 3. 依赖链分析（检查 package.json/requirements.txt）
 4. 权限声明审查（对比功能描述与声明权限）
-5. 生成审计报告（audit-report.json）
+5. 生成审计报告（<root>/registry/audit-report.json）
 6. 判定结果：
    - 安全 → 移入共享目录，注册到注册表
    - 可疑 → 提示用户确认，用户批准后方可安装
-   - 恶意 → 自动删除，记录到黑名单（blacklist.json）
+   - 恶意 → 自动删除，记录到黑名单（<root>/registry/blacklist.json）
 ```
 
 #### 21.4 黑名单机制
 
-- 恶意 Skill 的特征码（哈希、作者、URL）记录到 `shared/registry/blacklist.json`
+- 恶意资源的特征码（哈希、作者、URL）记录到 `<root>/registry/blacklist.json`
 - 再次遇到相同特征的资源时，直接拒绝安装并提示用户
 - 黑名单支持社区共享，可订阅可信来源的黑名单更新
 
 #### 21.5 审计工具集成
 
 推荐使用以下工具进行深度审计：
-- **静态分析**：`bandit`（Python）、`eslint-plugin-security`（JavaScript）
-- **依赖检查**：`safety`（Python）、`npm audit`（Node.js）
-- **沙箱运行**：在隔离环境中试运行 Skill，监控其行为
 
----
+- 静态分析：`bandit`（Python）、`eslint-plugin-security`（JavaScript）
+- 依赖检查：`safety`（Python）、`npm audit`（Node.js）
+- 沙箱运行：在隔离环境中试运行资源，监控其行为
 
-## 四、共享目录结构（更新）
+### 规则22：资源贡献激励
 
-```
-~/.trae-cn/shared/
-├── skills/
-│   ├── builtin/           # 内置 Skill
-│   ├── plugins/           # 插件提供的 Skill
-│   ├── user/              # 用户自定义 Skill
-│   └── quarantine/        # 隔离区（待审计的远程 Skill）
-├── mcps/                  # 共享 MCP 服务
-├── templates/             # 共享模板与脚手架
-├── knowledge/             # 共享知识库
-├── artifacts/             # 共享成果文件
-├── config/                # 共享配置
-├── registry/
-│   ├── resource-registry.json   # 全局资源注册表
-│   ├── blacklist.json           # 恶意资源黑名单
-│   └── audit-log.json           # 审计日志
-└── cache/                 # 共享缓存（如模型缓存、索引缓存）
-```
-
----
-
-## 五、操作指南
-
-### 5.1 安装一个共享 Skill
-
-1. 确定资源名称和命名空间（如 user:my-skill）
-2. 在 shared/skills/<namespace>/ 下创建 <name>@<version>/ 目录
-3. 放入 SKILL.md 和相关资源文件
-4. 在 resource-registry.json 中注册该资源
-5. 在各智能体的可用资源列表中即可发现
-
-### 5.2 迁移已安装的 Skill 到共享池
-
-1. 找到源 Skill 所在目录
-2. 复制到 shared/skills/<对应命名空间>/<name>@<version>/
-3. 在注册表中登记
-4. 验证其他智能体能否正确发现和加载
-
-### 5.3 锁定资源版本（智能体私有）
-
-在智能体私有目录下创建 `resource-lock.json`：
-
-```json
-{
-  "lockedResources": {
-    "builtin:html-report": "2.1.0",
-    "user:my-skill": "1.0.0"
-  }
-}
-```
-
-### 5.4 卸载智能体但保留资源
-
-只需删除智能体私有目录，`~/.trae-cn/shared/` 下的所有共享资源不受影响。
-
-### 5.5 从远程安装 Skill（带安全审计）
-
-```bash
-# 示例：从 GitHub 安装 Skill
-1. git clone https://github.com/xxx/skill-repo.git ~/.trae-cn/shared/skills/quarantine/skill-repo
-2. 执行安全审计（静态扫描 + 依赖检查）
-3. 审计通过 → 移动到 shared/skills/github/xxx/skill-repo@1.0.0/
-4. 审计可疑 → 提示用户确认
-5. 审计恶意 → 自动删除，加入黑名单
-```
-
----
-
-## 六、注册表格式规范
-
-`resource-registry.json` 结构：
-
-```json
-{
-  "schemaVersion": "1.0",
-  "lastUpdated": "ISO 8601 时间戳",
-  "description": "全局共享资源注册表",
-  "stats": {
-    "totalResources": 0,
-    "byType": {
-      "skill": 0,
-      "mcp": 0,
-      "template": 0,
-      "knowledge": 0,
-      "artifact": 0,
-      "config": 0
-    }
-  },
-  "resources": [
-    {
-      "id": "命名空间:名称",
-      "name": "资源名称",
-      "namespace": "builtin | plugins | user | github",
-      "type": "skill | mcp | template | knowledge | artifact | config",
-      "version": "1.0.0",
-      "description": "简短描述",
-      "author": "作者/来源",
-      "installTime": "ISO 8601 安装时间",
-      "path": "相对于 shared/ 的路径",
-      "dependencies": [],
-      "compatibility": {
-        "agentTypes": ["work", "code", "design"],
-        "minVersion": "1.0.0"
-      },
-      "tags": [],
-      "securityLevel": "public | restricted | private",
-      "auditStatus": "pending | passed | suspicious | malicious",
-      "auditTime": "ISO 8601 审计时间",
-      "usageCount": 0
-    }
-  ]
-}
-```
-
----
-
-## 七、执行优先级
-
-1. **用户显式指令** > 规则约定
-2. **数据安全与隐私保护** > 共享便利性
-3. **系统稳定性** > 资源复用效率
-4. **向后兼容** > 版本统一
-
----
-
-## 八、新增补充规则
-
-### 规则22：智能体资源贡献激励
-
-- 智能体每贡献一个高质量共享资源，在注册表中记录 `contributionScore`
-- 高贡献智能体的资源在搜索结果中优先展示
-- 定期生成资源共享报告，展示各智能体的贡献排名
+- 智能体/用户每贡献一个高质量共享资源，在注册表中记录 `contributionScore`
+- 高贡献来源的资源在搜索结果中优先展示
+- 定期生成资源共享报告，展示各来源的贡献排名
 
 ### 规则23：资源热更新机制
 
@@ -361,7 +243,7 @@ MCP 服务全局注册，同一服务只启动一个实例，多智能体共享�
 
 ### 规则26：资源备份与恢复
 
-- 定期自动备份共享目录到 `shared/backups/YYYY-MM-DD/`
+- 定期自动备份共享根目录到 `<root>/backups/YYYY-MM-DD/`
 - 支持按时间点恢复整个共享池或单个资源
 - 备份策略可配置（保留最近 N 份 / 保留最近 N 天）
 
@@ -381,11 +263,187 @@ MCP 服务全局注册，同一服务只启动一个实例，多智能体共享�
 
 ---
 
-## 九、注意事项
+## 二、智能体适配（Agent-Agnostic Mapping）
+
+本规范不依赖任何智能体的私有目录。各智能体只需做最小适配即可接入同一份共享资源池：
+
+| 智能体 | 私有目录（不存放共享资源） | 如何接入固定共享根 |
+|--------|--------------------------|-------------------|
+| WorkBuddy | `~/.workbuddy/` | 直接读取 `~/.agent-shared/`；skill 发现可引用/软链，不复制 |
+| TRAE | `~/.trae-cn/` | 同上；原 `~/.trae-cn/shared/` 可改为指向 `~/.agent-shared/` 的符号链接以平滑迁移 |
+| Claude Code | `~/.claude/` | 同上 |
+| ChatGPT / Codex（桌面/CLI） | 其应用数据目录 | 同上；通过读取 `~/.agent-shared/` 加载共享 skill |
+| Gemini CLI / Cursor / 其他 | 各自私有目录 | 同上 |
+
+接入要点：
+
+1. 各智能体**不要**把共享 skill 复制进自己的私有 skills 目录；而是**引用/软链**到 `<root>/skills/`。
+2. 若某智能体不支持软链，可在其配置中把「skill 搜索路径」追加 `<root>/skills/*`。
+3. 注册表 `<root>/registry/resource-registry.json` 是所有智能体的唯一真相源。
+
+---
+
+## 三、共享目录结构
+
+```
+~/.agent-shared/                         # 固定共享根（AGENT_SHARED_ROOT 可覆盖）
+├── skills/
+│   ├── builtin/           # 内置 Skill
+│   │   └── <name>@<version>/
+│   ├── user/              # 用户自定义 Skill
+│   │   └── <name>@<version>/
+│   ├── project/           # 项目级 Skill
+│   │   └── <name>@<version>/
+│   ├── remote/            # 远程/第三方 Skill
+│   │   └── <source>/<name>@<version>/
+│   └── quarantine/        # 隔离区（待审计的远程资源）
+├── mcps/                  # 共享 MCP / Connector 服务
+│   └── <name>@<version>/
+├── templates/             # 共享模板与脚手架
+│   ├── project/
+│   ├── component/
+│   └── document/
+├── knowledge/             # 共享知识库
+│   ├── best-practices/
+│   ├── faq/
+│   └── domain-knowledge/
+├── artifacts/             # 共享成果文件
+│   ├── code-snippets/
+│   ├── configs/
+│   └── datasets/
+├── config/                # 共享配置（凭证加密存储）
+│   └── <config-set>.json
+├── locks/                 # 各智能体的版本锁定文件
+│   └── <agent-id>/resource-lock.json
+├── registry/
+│   ├── resource-registry.json   # 全局资源注册表（唯一真相源）
+│   ├── blacklist.json           # 恶意资源黑名单
+│   └── audit-log.json           # 审计日志
+└── backups/               # 备份（按日期）
+```
+
+---
+
+## 四、操作指南
+
+### 4.1 初始化固定共享根（首次）
+
+创建 `~/.agent-shared/` 目录结构与 `registry/resource-registry.json`。各智能体首次接入时执行一次即可，之后共用。
+
+### 4.2 安装一个共享 Skill
+
+```
+1. 确定资源名称和命名空间（如 user:my-skill）
+2. 在 <root>/skills/<namespace>/ 下创建 <name>@<version>/ 目录
+3. 放入 SKILL.md 和相关资源文件
+4. 在 resource-registry.json 中注册该资源
+5. 各智能体通过引用/软链即可发现使用
+```
+
+### 4.3 迁移某智能体私有 skill 到共享池
+
+```
+1. 找到源 skill 所在目录（某智能体私有目录）
+2. 复制到 <root>/skills/<对应命名空间>/<name>@<version>/
+3. 在注册表中登记
+4. 验证其他智能体能否正确发现和加载
+5. 验证无误后，将原私有副本改为指向共享根的符号链接（可选）
+```
+
+### 4.4 锁定资源版本（智能体私有）
+
+在各智能体私有目录或 `<root>/locks/<agent-id>/` 下创建 `resource-lock.json`：
+
+```json
+{
+  "lockedResources": {
+    "builtin:html-report": "2.1.0",
+    "user:my-skill": "1.0.0"
+  }
+}
+```
+
+### 4.5 卸载某智能体但保留资源
+
+只需删除该智能体私有目录，`~/.agent-shared/` 下的所有共享资源不受影响。
+
+### 4.6 从远程安装资源（带安全审计）
+
+```bash
+# 示例：从 GitHub 安装 Skill（先隔离审计，再移入）
+1. 克隆/下载资源到 <root>/skills/quarantine/<name>/   # 临时隔离区
+2. 执行安全审计（静态扫描 + 依赖检查，见规则21）
+3. 审计通过 → 移动到 <root>/skills/remote/github/<name>@<version>/
+4. 审计可疑 → 提示用户确认
+5. 审计恶意 → 自动删除，加入 <root>/registry/blacklist.json
+```
+
+---
+
+## 五、注册表格式规范
+
+`resource-registry.json` 结构：
+
+```json
+{
+  "schemaVersion": "1.0",
+  "lastUpdated": "ISO 8601 时间戳",
+  "description": "跨智能体共享资源注册表",
+  "root": "~/.agent-shared/",
+  "stats": {
+    "totalResources": 0,
+    "byType": {
+      "skill": 0,
+      "mcp": 0,
+      "template": 0,
+      "knowledge": 0,
+      "artifact": 0,
+      "config": 0
+    }
+  },
+  "resources": [
+    {
+      "id": "命名空间:名称",
+      "name": "资源名称",
+      "namespace": "builtin | user | project | remote",
+      "type": "skill | mcp | template | knowledge | artifact | config",
+      "version": "1.0.0",
+      "description": "简短描述",
+      "author": "作者/来源",
+      "installTime": "ISO 8601 安装时间",
+      "path": "相对于共享根的路径",
+      "dependencies": [
+        {"id": "依赖资源ID", "versionRange": "^1.0.0"}
+      ],
+      "compatibility": {
+        "agentTypes": ["workbuddy", "trae", "claude-code", "chatgpt", "codex", "gemini-cli", "cursor", "any"],
+        "minVersion": "1.0.0"
+      },
+      "tags": ["标签1", "标签2"],
+      "securityLevel": "public | restricted | private",
+      "usageCount": 0
+    }
+  ]
+}
+```
+
+---
+
+## 六、执行优先级
+
+1. **用户显式指令** > 规则约定
+2. **数据安全与隐私保护** > 共享便利性
+3. **系统稳定性** > 资源复用效率
+4. **向后兼容** > 版本统一
+
+---
+
+## 七、注意事项
 
 - 操作共享资源前确认用户意图，避免误改
 - 敏感信息（凭证、Token 等）不得明文存储在共享目录
 - 第三方来源的资源安装前需提示风险并获得用户确认
-- 资源删除操作需二次确认，默认采用"软删除"（仅从注册表移除，文件保留）
+- 资源删除操作需二次确认，默认采用「软删除」（仅从注册表移除，文件保留）
 - 安全审计发现恶意资源时，立即删除并通知所有智能体
 - 共享目录的写入操作必须通过统一接口，禁止直接修改文件
+- **固定共享根是本规范的强制约束**：任何新增资源都不得绕过 `~/.agent-shared/`，也不得写入任一智能体的私有目录
