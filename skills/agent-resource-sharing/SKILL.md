@@ -1,5 +1,6 @@
 ---
 name: "agent-resource-sharing"
+version: "2.0.0"
 description: "跨智能体通用的资源共享规范与目录约定，适配 WorkBuddy、TRAE、Claude Code、ChatGPT、Codex、Gemini CLI、Cursor 等所有 AI 编程/对话智能体。定义统一的固定共享根目录（规则0）、资源独立存续原则、命名空间、注册表与发现机制、安全审计（规则21-28）。在需要安装/迁移/共享 skill、MCP/Connector、模板、知识库、成果文件，或搭建多智能体协作环境时调用。"
 ---
 
